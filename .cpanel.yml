@@ -1,0 +1,14 @@
+---
+deployment:
+  tasks:
+    - export DEPLOYPATH=/home/dscx7887/public_html/nobar
+
+    - /bin/mkdir -p $DEPLOYPATH
+
+    - /bin/cp public/index.php $DEPLOYPATH
+    - /bin/cp public/.htaccess $DEPLOYPATH
+    - /bin/cp public/favicon.ico $DEPLOYPATH
+    - /bin/cp public/robots.txt $DEPLOYPATH
+
+    - /bin/cp -R public/build $DEPLOYPATH
+    - /bin/cp -R public/storage $DEPLOYPATH
