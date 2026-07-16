@@ -35,6 +35,8 @@ Route::middleware('auth')->group(function () {
     // Superadmin routes
     Route::middleware(EnsureSuperadmin::class)->group(function () {
         Route::get('/dashboard/participants', ParticipantController::class)->name('dashboard.participants');
+        Route::post('/dashboard/participants/{registration}/resend-whatsapp', [ParticipantController::class, 'resendWhatsApp'])->name('dashboard.participants.resend-whatsapp');
+        Route::post('/dashboard/participants/resend-failed-whatsapp', [ParticipantController::class, 'resendFailedWhatsApp'])->name('dashboard.participants.resend-failed-whatsapp');
         Route::get('/dashboard/whatsapp-settings', [WhatsAppSettingController::class, 'index'])->name('dashboard.whatsapp-settings');
         Route::post('/dashboard/whatsapp-settings', [WhatsAppSettingController::class, 'update'])->name('dashboard.whatsapp-settings.update');
         Route::post('/dashboard/whatsapp-settings/test', [WhatsAppSettingController::class, 'testConnection'])->name('dashboard.whatsapp-settings.test');

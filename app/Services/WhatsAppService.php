@@ -11,6 +11,8 @@ class WhatsAppService
 {
     public function __construct(
         private readonly SettingsService $settingsService,
+        private readonly RegistrationMessageBuilder $messageBuilder,
+        private readonly TicketService $ticketService,
     ) {
     }
 
@@ -18,12 +20,12 @@ class WhatsAppService
     {
         $message = $messageOverride ?? $this->buildRegistrationMessage($registration, $eventTitle, $eventLocation);
 
-        return $this->sendMessage($registration->whatsapp_number, $message);
+        return $this->sendMessage($registration, $message);
     }
 
     public function sendTestMessage(string $target, string $message = 'Test connection from DSCM Event.'): bool
     {
-        return $this->sendMessage($target, $message);
+        return $this->sendMessageToTarget($target, $message);
     }
 
     public function sendPanitiaCredentials(User $panitia, string $temporaryPassword, string $loginUrl): bool
@@ -49,10 +51,97 @@ class WhatsAppService
             return false;
         }
 
-        return $this->sendMessage($panitia->phone, $message);
+        return $this->sendMessageToTarget($panitia->phone, $message);
     }
 
-    private function sendMessage(string $target, string $message): bool
+    public function resendRegistrationWhatsApp(Registration $registration, string $eventTitle, ?string $eventLocation = null, ?string $messageOverride = null): bool
+    {
+        $message = $messageOverride ?? $this->buildRegistrationMessage($registration, $eventTitle, $eventLocation);
+
+        return $this->sendMessage($registration, $message);
+    }
+
+    private function sendMessage(Registration $registration, string $message): bool
+    {
+        $target = $registration->whatsapp_number;
+
+        if (! $this->settingsService->boolean('whatsapp_enabled', true)) {
+            Log::info('WhatsApp sending skipped because the service is disabled.', [
+                'target' => $target,
+            ]);
+
+            $registration->forceFill([
+                'wa_status' => 'failed',
+                'wa_error' => 'WhatsApp service is disabled.',
+                'wa_retry_count' => (int) $registration->wa_retry_count + 1,
+            ])->save();
+
+            return false;
+        }
+
+        $token = $this->settingsService->string('fonnte_token');
+        if ($token === '') {
+            Log::warning('WhatsApp settings are incomplete.', [
+                'target' => $target,
+            ]);
+
+            $registration->forceFill([
+                'wa_status' => 'failed',
+                'wa_error' => 'WhatsApp settings are incomplete.',
+                'wa_retry_count' => (int) $registration->wa_retry_count + 1,
+            ])->save();
+
+            return false;
+        }
+
+        try {
+            $response = Http::withHeaders([
+                'Authorization' => $token,
+            ])->asForm()->post('https://api.fonnte.com/send', [
+                'target' => $target,
+                'message' => $message,
+            ]);
+
+            if ($response->successful()) {
+                $registration->forceFill([
+                    'wa_status' => 'sent',
+                    'wa_sent_at' => now(),
+                    'wa_error' => null,
+                ])->save();
+
+                return true;
+            }
+
+            $error = 'WhatsApp request returned an unexpected response.';
+            Log::warning($error, [
+                'target' => $target,
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
+
+            $registration->forceFill([
+                'wa_status' => 'failed',
+                'wa_error' => $error,
+                'wa_retry_count' => (int) $registration->wa_retry_count + 1,
+            ])->save();
+        } catch (\Throwable $throwable) {
+            $error = $throwable->getMessage();
+            Log::warning('WhatsApp confirmation could not be sent.', [
+                'target' => $target,
+                'error' => $error,
+            ]);
+
+            $registration->forceFill([
+                'wa_status' => 'failed',
+                'wa_error' => $error,
+                'wa_retry_count' => (int) $registration->wa_retry_count + 1,
+            ])->save();
+        }
+
+        return false;
+    }
+
+    private function sendMessageToTarget(string $target, string $message): bool
     {
         if (! $this->settingsService->boolean('whatsapp_enabled', true)) {
             Log::info('WhatsApp sending skipped because the service is disabled.', [
@@ -100,20 +189,10 @@ class WhatsAppService
 
     private function buildRegistrationMessage(Registration $registration, string $eventTitle, ?string $eventLocation = null): string
     {
-        $snackLine = $registration->bring_snack
-            ? 'Anda memilih untuk membawa makanan / camilan.'
-            : 'Anda tidak memilih untuk membawa makanan / camilan.';
-
-        return implode("\n", array_filter([
-            'Pendaftaran berhasil, '.$registration->full_name.'.',
-            '',
-            'Terima kasih sudah mendaftar untuk '.$eventTitle.'.',
-            $eventLocation ? 'Lokasi acara: '.$eventLocation : null,
-            'Gereja asal: '.$registration->church_name,
-            'Nomor WhatsApp: '.$registration->whatsapp_number,
-            $snackLine,
-            '',
-            'Sampai bertemu di acara.',
-        ]));
+        return $this->messageBuilder->build(
+            $registration,
+            $registration->registration_number,
+            $this->ticketService->generateTicketUrl($registration->ticket_token),
+        );
     }
 }
