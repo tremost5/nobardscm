@@ -3,7 +3,6 @@
 namespace App\Http\Requests;
 
 use App\Support\WhatsappNumber;
-use Illuminate\Validation\Rule;
 use Illuminate\Foundation\Http\FormRequest;
 
 class StoreRegistrationRequest extends FormRequest
@@ -29,7 +28,6 @@ class StoreRegistrationRequest extends FormRequest
                 'required',
                 'string',
                 'regex:/^62\d{8,13}$/',
-                Rule::unique('registrations', 'whatsapp_number'),
             ],
             'bring_snack' => ['nullable', 'boolean'],
             'website' => ['nullable', 'prohibited'],
@@ -40,7 +38,6 @@ class StoreRegistrationRequest extends FormRequest
     {
         return [
             'whatsapp_number.regex' => 'Nomor WhatsApp harus diawali 62 dan berisi 10 sampai 15 digit angka.',
-            'whatsapp_number.unique' => 'Nomor WhatsApp ini sudah terdaftar.',
         ];
     }
 }
