@@ -8,10 +8,9 @@ use App\Services\EventService;
 use App\Services\RegistrationMessageBuilder;
 use App\Services\TicketService;
 use App\Services\WhatsAppService;
-use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
-use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\Log;
 use Illuminate\View\View;
 
 class RegistrationController extends Controller
@@ -23,30 +22,27 @@ class RegistrationController extends Controller
         TicketService $ticketService,
         RegistrationMessageBuilder $messageBuilder,
     ): JsonResponse|RedirectResponse {
+        $ticketData = $ticketService->generateForRegistration(new Registration());
+
+        $registration = Registration::query()->create([
+            'full_name' => (string) $request->string('full_name'),
+            'church_name' => (string) $request->string('church_name'),
+            'whatsapp_number' => (string) $request->string('whatsapp_number'),
+            'bring_snack' => $request->boolean('bring_snack'),
+            'registration_number' => $ticketData['registration_number'],
+            'ticket_token' => $ticketData['ticket_token'],
+        ]);
+
         try {
-            $ticketData = $ticketService->generateForRegistration(new Registration());
-
-            $registration = Registration::query()->create([
-                'full_name' => (string) $request->string('full_name'),
-                'church_name' => (string) $request->string('church_name'),
-                'whatsapp_number' => (string) $request->string('whatsapp_number'),
-                'bring_snack' => $request->boolean('bring_snack'),
-                'registration_number' => $ticketData['registration_number'],
-                'ticket_token' => $ticketData['ticket_token'],
+            $event = $eventService->currentEvent();
+            $message = $messageBuilder->build($registration, $registration->registration_number, $ticketService->generateTicketUrl($registration->ticket_token));
+            $whatsAppService->sendRegistrationConfirmation($registration, $event->title, $event->location, $message);
+        } catch (\Throwable $exception) {
+            Log::warning('Registration succeeded but WhatsApp delivery could not be completed.', [
+                'registration_id' => $registration->id,
+                'error' => $exception->getMessage(),
             ]);
-        } catch (QueryException $exception) {
-            if ((string) $exception->getCode() === '23000') {
-                throw ValidationException::withMessages([
-                    'whatsapp_number' => 'Nomor WhatsApp ini sudah terdaftar.',
-                ]);
-            }
-
-            throw $exception;
         }
-
-        $event = $eventService->currentEvent();
-        $message = $messageBuilder->build($registration, $registration->registration_number, $ticketService->generateTicketUrl($registration->ticket_token));
-        $whatsAppService->sendRegistrationConfirmation($registration, $event->title, $event->location, $message);
 
         if ($request->expectsJson()) {
             session(['registration_id' => $registration->id]);

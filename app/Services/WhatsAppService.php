@@ -18,9 +18,18 @@ class WhatsAppService
 
     public function sendRegistrationConfirmation(Registration $registration, string $eventTitle, ?string $eventLocation = null, ?string $messageOverride = null): bool
     {
-        $message = $messageOverride ?? $this->buildRegistrationMessage($registration, $eventTitle, $eventLocation);
+        try {
+            $message = $messageOverride ?? $this->buildRegistrationMessage($registration, $eventTitle, $eventLocation);
 
-        return $this->sendMessage($registration, $message);
+            return $this->sendMessage($registration, $message);
+        } catch (\Throwable $throwable) {
+            Log::warning('Registration WhatsApp confirmation could not be sent.', [
+                'registration_id' => $registration->id,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 
     public function sendTestMessage(string $target, string $message = 'Test connection from DSCM Event.'): bool
@@ -56,9 +65,18 @@ class WhatsAppService
 
     public function resendRegistrationWhatsApp(Registration $registration, string $eventTitle, ?string $eventLocation = null, ?string $messageOverride = null): bool
     {
-        $message = $messageOverride ?? $this->buildRegistrationMessage($registration, $eventTitle, $eventLocation);
+        try {
+            $message = $messageOverride ?? $this->buildRegistrationMessage($registration, $eventTitle, $eventLocation);
 
-        return $this->sendMessage($registration, $message);
+            return $this->sendMessage($registration, $message);
+        } catch (\Throwable $throwable) {
+            Log::warning('Resend WhatsApp could not be completed.', [
+                'registration_id' => $registration->id,
+                'error' => $throwable->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 
     private function sendMessage(Registration $registration, string $message): bool
@@ -97,17 +115,16 @@ class WhatsAppService
         try {
             $response = Http::withHeaders([
                 'Authorization' => $token,
-            ])->asForm()->post('https://api.fonnte.com/send', [
-                'target' => $target,
-                'message' => $message,
-            ]);
+            ])->asForm()
+                ->connectTimeout(5)
+                ->timeout(10)
+                ->post('https://api.fonnte.com/send', [
+                    'target' => $target,
+                    'message' => $message,
+                ]);
 
             if ($response->successful()) {
-                $registration->forceFill([
-                    'wa_status' => 'sent',
-                    'wa_sent_at' => now(),
-                    'wa_error' => null,
-                ])->save();
+                $this->updateRegistrationDeliveryStatus($registration, 'sent');
 
                 return true;
             }
@@ -119,11 +136,7 @@ class WhatsAppService
                 'body' => $response->body(),
             ]);
 
-            $registration->forceFill([
-                'wa_status' => 'failed',
-                'wa_error' => $error,
-                'wa_retry_count' => (int) $registration->wa_retry_count + 1,
-            ])->save();
+            $this->updateRegistrationDeliveryStatus($registration, 'failed', $error);
         } catch (\Throwable $throwable) {
             $error = $throwable->getMessage();
             Log::warning('WhatsApp confirmation could not be sent.', [
@@ -131,11 +144,7 @@ class WhatsAppService
                 'error' => $error,
             ]);
 
-            $registration->forceFill([
-                'wa_status' => 'failed',
-                'wa_error' => $error,
-                'wa_retry_count' => (int) $registration->wa_retry_count + 1,
-            ])->save();
+            $this->updateRegistrationDeliveryStatus($registration, 'failed', $error);
         }
 
         return false;
@@ -163,10 +172,13 @@ class WhatsAppService
         try {
             $response = Http::withHeaders([
                 'Authorization' => $token,
-            ])->asForm()->post('https://api.fonnte.com/send', [
-                'target' => $target,
-                'message' => $message,
-            ]);
+            ])->asForm()
+                ->connectTimeout(5)
+                ->timeout(10)
+                ->post('https://api.fonnte.com/send', [
+                    'target' => $target,
+                    'message' => $message,
+                ]);
 
             if ($response->successful()) {
                 return true;
@@ -194,5 +206,27 @@ class WhatsAppService
             $registration->registration_number,
             $this->ticketService->generateTicketUrl($registration->ticket_token),
         );
+    }
+
+    private function updateRegistrationDeliveryStatus(Registration $registration, string $status, ?string $error = null): void
+    {
+        try {
+            $payload = ['wa_status' => $status];
+
+            if ($status === 'sent') {
+                $payload['wa_sent_at'] = now();
+                $payload['wa_error'] = null;
+            } else {
+                $payload['wa_error'] = $error;
+                $payload['wa_retry_count'] = (int) $registration->wa_retry_count + 1;
+            }
+
+            $registration->forceFill($payload)->save();
+        } catch (\Throwable $throwable) {
+            Log::warning('Registration WhatsApp status could not be updated.', [
+                'registration_id' => $registration->id,
+                'error' => $throwable->getMessage(),
+            ]);
+        }
     }
 }
